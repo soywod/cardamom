@@ -1,0 +1,9 @@
+[package]
+name = "cardamom-lib"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = "=0.4.19"
+thiserror = "=1.0.30"
+url = "=2.2.2"
