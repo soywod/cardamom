@@ -1,38 +1,13 @@
+pub mod card;
+pub mod card_parsers;
+pub mod card_repository;
 pub mod carddav;
+pub mod error;
+pub mod remote_card_repository;
 
-use chrono::{DateTime, Utc};
-use std::{
-    collections::{HashMap, HashSet},
-    ops::{Deref, DerefMut},
-    path::PathBuf,
-};
-use url::Url;
+use std::{collections::HashSet, path::PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct Card {
-    id: String,
-    path: PathBuf,
-    url: Url,
-    etag: String,
-    date: DateTime<Utc>,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub struct Cards(HashMap<String, Card>);
-
-impl Deref for Cards {
-    type Target = HashMap<String, Card>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for Cards {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
+use crate::{card::*, error::*};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Hunk {
@@ -49,6 +24,54 @@ enum HunkKind {
 }
 
 type Patch = Vec<Hunk>;
+
+fn build_cached_cards(path: PathBuf) -> Result<Cards> {
+    let reader = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(path)
+        .map_err(|_| CardamomError::UnknownError)?;
+    serde_json::from_reader(reader).map_err(|_| CardamomError::UnknownError)
+}
+
+// fn build_local_cards(cache: &Cards, dir: PathBuf) -> Result<Cards> {
+//     Ok(fs::read_dir(dir)
+//         .map_err(|_| CardamomError::Unknown)?
+//         .filter_map(|entry| match entry {
+//             Err(_) => None,
+//             Ok(entry) => {
+//                 let is_entry_vcf = entry
+//                     .path()
+//                     .extension()
+//                     .map(|ext| ext == "vcf")
+//                     .unwrap_or_default();
+//                 if is_entry_vcf {
+//                     Some(entry)
+//                 } else {
+//                     None
+//                 }
+//             }
+//         })
+//         .fold(Cards::default(), |mut cards, entry| {
+//             match PathBuf::from(entry.path()).file_stem() {
+//                 None => cards,
+//                 Some(name) => {
+//                     let card = Card {
+//                         name: name.to_string_lossy().to_string(),
+//                         date: entry.metadata().unwrap().modified().unwrap().into(),
+//                     };
+
+//                     cards.insert(name.to_string_lossy().to_string(), card);
+//                     cards
+//                 }
+//             }
+//         }))
+// }
+
+fn build_remote_cards(path: PathBuf) -> Result<Cards> {
+    Ok(Cards::default())
+}
 
 fn build_patch(local: Cards, cache: Cards, remote: Cards) -> Patch {
     let mut ids = HashSet::new();
@@ -146,7 +169,8 @@ fn build_patch(local: Cards, cache: Cards, remote: Cards) -> Patch {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::FromIterator;
+    use chrono::{DateTime, Local};
+    use std::{collections::HashMap, iter::FromIterator};
 
     use super::*;
 
@@ -154,7 +178,7 @@ mod tests {
         ($date: literal) => {
             DateTime::parse_from_rfc3339(&format!("{}T00:00:00+00:00", $date))
                 .unwrap()
-                .with_timezone(&Utc)
+                .with_timezone(&Local)
         };
     }
 
@@ -166,6 +190,7 @@ mod tests {
                 url: format!("http://localhost/{}", $id).parse().unwrap(),
                 etag: format!("{}", $id),
                 date: date!("2022-01-02"),
+                content: String::new(),
             }
         };
     }
@@ -180,6 +205,7 @@ mod tests {
                     url: format!("http://localhost/{}", $id).parse().unwrap(),
                     etag: format!("{}", $id),
                     date: date!("2022-01-02"),
+                    content: String::new(),
                 },
             )
         };

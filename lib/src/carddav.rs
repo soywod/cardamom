@@ -1,14 +1,15 @@
+use std::path::PathBuf;
+
 use chrono::{DateTime, Local};
 use quick_xml::de as xml;
 use reqwest::{blocking::Client, Method};
 use serde::Deserialize;
-use thiserror::Error;
 
-#[derive(Debug, Error)]
-pub enum CardamomError {
-    #[error("unknown error")]
-    Unknown,
-}
+use crate::{
+    card::{Card, Cards},
+    card_parsers::date_parser,
+    error::*,
+};
 
 #[derive(Debug, Deserialize)]
 pub struct Multistatus<T> {
@@ -56,21 +57,6 @@ pub struct GetEtag {
 pub struct GetLastModified {
     #[serde(with = "date_parser", rename = "$value")]
     pub value: DateTime<Local>,
-}
-
-mod date_parser {
-    use chrono::{DateTime, Local};
-    use serde::{self, Deserialize, Deserializer};
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<DateTime<Local>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        DateTime::parse_from_rfc2822(&s)
-            .map(|d| d.into())
-            .map_err(serde::de::Error::custom)
-    }
 }
 
 // Current user principal structs
@@ -140,15 +126,15 @@ pub struct CtagProp {
 
 // Methods
 
-fn propfind() -> Result<Method, CardamomError> {
-    Method::from_bytes(b"PROPFIND").map_err(|_| CardamomError::Unknown)
+fn propfind() -> Result<Method> {
+    Method::from_bytes(b"PROPFIND").map_err(|_| CardamomError::UnknownError)
 }
 
-fn fetch_current_user_principal_url(
-    host: &str,
-    path: String,
-    client: &Client,
-) -> Result<String, CardamomError> {
+fn report() -> Result<Method> {
+    Method::from_bytes(b"REPORT").map_err(|_| CardamomError::UnknownError)
+}
+
+fn fetch_current_user_principal_url(host: &str, path: String, client: &Client) -> Result<String> {
     let res = client
         .request(propfind()?, format!("{}{}", host, path))
         .basic_auth("user", Some(""))
@@ -162,10 +148,10 @@ fn fetch_current_user_principal_url(
             "#,
         )
         .send()
-        .map_err(|_| CardamomError::Unknown)?;
-    let res = res.text().map_err(|_| CardamomError::Unknown)?;
+        .map_err(|_| CardamomError::UnknownError)?;
+    let res = res.text().map_err(|_| CardamomError::UnknownError)?;
     let res: Multistatus<CurrentUserPrincipalProp> =
-        xml::from_str(&res).map_err(|_| CardamomError::Unknown)?;
+        xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
     let path = res
         .responses
         .first()
@@ -181,11 +167,7 @@ fn fetch_current_user_principal_url(
     Ok(path)
 }
 
-fn fetch_addressbook_home_set_url(
-    host: &str,
-    path: String,
-    client: &Client,
-) -> Result<String, CardamomError> {
+fn fetch_addressbook_home_set_url(host: &str, path: String, client: &Client) -> Result<String> {
     let res = client
         .request(propfind()?, format!("{}{}", host, path))
         .basic_auth("user", Some(""))
@@ -199,10 +181,10 @@ fn fetch_addressbook_home_set_url(
             "#,
         )
         .send()
-        .map_err(|_| CardamomError::Unknown)?;
-    let res = res.text().map_err(|_| CardamomError::Unknown)?;
+        .map_err(|_| CardamomError::UnknownError)?;
+    let res = res.text().map_err(|_| CardamomError::UnknownError)?;
     let res: Multistatus<AddressbookHomeSetProp> =
-        xml::from_str(&res).map_err(|_| CardamomError::Unknown)?;
+        xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
     let path = res
         .responses
         .first()
@@ -211,19 +193,15 @@ fn fetch_addressbook_home_set_url(
     Ok(path)
 }
 
-fn fetch_addressbook_url(
-    host: &str,
-    path: String,
-    client: &Client,
-) -> Result<String, CardamomError> {
+fn fetch_addressbook_url(host: &str, path: String, client: &Client) -> Result<String> {
     let res = client
         .request(propfind()?, host)
         .basic_auth("user", Some(""))
         .send()
-        .map_err(|_| CardamomError::Unknown)?;
-    let res = res.text().map_err(|_| CardamomError::Unknown)?;
+        .map_err(|_| CardamomError::UnknownError)?;
+    let res = res.text().map_err(|_| CardamomError::UnknownError)?;
     let res: Multistatus<AddressbookProp> =
-        xml::from_str(&res).map_err(|_| CardamomError::Unknown)?;
+        xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
     let path = res
         .responses
         .iter()
@@ -249,10 +227,55 @@ fn fetch_addressbook_url(
     Ok(path)
 }
 
-pub fn addressbook_path(host: &str, client: &Client) -> Result<String, CardamomError> {
+pub fn addressbook_path(host: &str, client: &Client) -> Result<String> {
     let path = String::from("/");
     let path = fetch_current_user_principal_url(host, path, client)?;
     let path = fetch_addressbook_home_set_url(host, path, client)?;
     let path = fetch_addressbook_url(host, path, client)?;
     Ok(path)
+}
+
+pub fn fetch_all_cards(path: &str, client: &Client) -> Result<Cards> {
+    let res = client
+        .request(report()?, path)
+        .basic_auth("user", Some(""))
+        .header("Depth", "1")
+        .body(
+            r#"
+            <C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+                <D:prop>
+                    <D:getetag />
+                    <D:getlastmodified />
+                    <C:address-data />
+                </D:prop>
+            </C:addressbook-query>
+            "#,
+        )
+        .send()
+        .map_err(|_| CardamomError::UnknownError)?;
+    let res = res.text().map_err(|_| CardamomError::UnknownError)?;
+    let res: Multistatus<AddressDataProp> =
+        xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
+
+    let cards = res
+        .responses
+        .iter()
+        .fold(Cards::default(), |mut cards, res| {
+            let card = Card {
+                id: PathBuf::from(&res.href.value)
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
+                etag: res.propstat.prop.getetag.value.to_owned(),
+                url: res.href.value.parse().unwrap(),
+                path: PathBuf::new(),
+                date: res.propstat.prop.getlastmodified.value,
+                content: String::new(),
+            };
+            cards.insert(card.id.to_owned(), card);
+            cards
+        });
+
+    Ok(cards)
 }

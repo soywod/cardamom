@@ -43,6 +43,7 @@
               rustfmt
               rnix-lsp
               nixpkgs-fmt
+              docker-compose
             ];
           };
         }
