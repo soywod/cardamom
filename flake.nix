@@ -1,5 +1,5 @@
 {
-  description = "Command-line interface and Rust library for contact management and synchronization";
+  description = "Command-line interface for contact management and synchronization";
 
   inputs = {
     utils.url = "github:numtide/flake-utils";

@@ -1,3 +1,5 @@
+pub mod carddav;
+
 use chrono::{DateTime, Utc};
 use std::{
     collections::{HashMap, HashSet},
@@ -144,7 +146,7 @@ fn build_patch(local: Cards, cache: Cards, remote: Cards) -> Patch {
 
 #[cfg(test)]
 mod tests {
-    use std::{iter::FromIterator, str::FromStr};
+    use std::iter::FromIterator;
 
     use super::*;
 
@@ -186,18 +188,18 @@ mod tests {
     #[test]
     fn test_build_patch() {
         let local = Cards(HashMap::from_iter([
-            card_entry!("everywhere"),
+            card_entry!("everywhere-same"),
             card_entry!("local-only"),
             card_entry!("local-and-cache"),
         ]));
         let cache = Cards(HashMap::from_iter([
-            card_entry!("everywhere"),
+            card_entry!("everywhere-same"),
             card_entry!("cache-only"),
             card_entry!("local-and-cache"),
             card_entry!("remote-and-cache"),
         ]));
         let remote = Cards(HashMap::from_iter([
-            card_entry!("everywhere"),
+            card_entry!("everywhere-same"),
             card_entry!("remote-only"),
             card_entry!("remote-and-cache"),
         ]));
