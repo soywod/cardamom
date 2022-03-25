@@ -3,18 +3,13 @@ use serde::Deserialize;
 use std::{
     collections::HashMap,
     ops::{Deref, DerefMut},
-    path::PathBuf,
 };
-use url::Url;
 
-use crate::card_parsers::{date_parser, url_parser};
+use crate::card_parsers::date_parser;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
 pub struct Card {
     pub id: String,
-    pub path: PathBuf,
-    #[serde(with = "url_parser")]
-    pub url: Url,
     pub etag: String,
     #[serde(with = "date_parser")]
     pub date: DateTime<Local>,

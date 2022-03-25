@@ -1,0 +1,15 @@
+BEGIN:VCARD
+VERSION:3.0
+UID:urn:uuid:22d3a5d9-c324-459a-b5b6-e8b5a26eb9c9
+N:Doe2;John2;;;
+FN:John Doe 2
+ORG:Example.com Inc.;
+TITLE:Imaginary test person 2
+EMAIL;type=INTERNET;type=WORK;type=pref:johnDoe2@example.org
+TEL;type=WORK;type=pref:+1 617 555 1212
+TEL;type=WORK:+1 (617) 555-1234
+TEL;type=CELL:+1 781 555 1212
+TEL;type=HOME:+1 202 555 1212
+NOTE:John Doe has a long and varied history\, being documented on more police files that anyone else. Reports of his death are alas numerous.
+CATEGORIES:Work,Test group
+END:VCARD

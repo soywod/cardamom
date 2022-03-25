@@ -1,8 +1,12 @@
-use crate::{card::Card, error::*};
+use crate::{
+    card::{Card, Cards},
+    error::*,
+};
 
 pub trait CardRepository {
-    fn create(&self, card: &mut Card) -> Result<()>;
-    fn read(&self, id: &str) -> Result<Card>;
+    fn insert(&self, card: &mut Card) -> Result<()>;
+    fn select(&self, id: &str) -> Result<Card>;
+    fn select_all(&self) -> Result<Cards>;
     fn update(&self, card: &mut Card) -> Result<()>;
     fn delete(&self, card: &Card) -> Result<()>;
 }

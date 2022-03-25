@@ -1,26 +1,16 @@
-use std::path::PathBuf;
-
 use chrono::{DateTime, Local};
 use quick_xml::de as xml;
 use reqwest::{blocking::Client, Method};
 use serde::Deserialize;
 
-use crate::{
-    card::{Card, Cards},
-    card_parsers::date_parser,
-    error::*,
-};
+use crate::{card_parsers::date_parser, error::*};
+
+// Multistatus structs
 
 #[derive(Debug, Deserialize)]
-pub struct Multistatus<T> {
-    #[serde(rename = "response")]
-    pub responses: Vec<Response<T>>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Response<T> {
-    pub href: Href,
-    pub propstat: Propstat<T>,
+pub struct Status {
+    #[serde(rename = "$value")]
+    pub value: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -36,10 +26,18 @@ pub struct Href {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct Status {
-    #[serde(rename = "$value")]
-    pub value: String,
+pub struct Response<T> {
+    pub href: Href,
+    pub propstat: Propstat<T>,
 }
+
+#[derive(Debug, Deserialize)]
+pub struct Multistatus<T> {
+    #[serde(rename = "response")]
+    pub responses: Vec<Response<T>>,
+}
+
+// Other structs
 
 #[derive(Debug, Deserialize)]
 pub struct GetCtag {
@@ -130,7 +128,7 @@ fn propfind() -> Result<Method> {
     Method::from_bytes(b"PROPFIND").map_err(|_| CardamomError::UnknownError)
 }
 
-fn report() -> Result<Method> {
+pub fn report() -> Result<Method> {
     Method::from_bytes(b"REPORT").map_err(|_| CardamomError::UnknownError)
 }
 
@@ -138,6 +136,8 @@ fn fetch_current_user_principal_url(host: &str, path: String, client: &Client) -
     let res = client
         .request(propfind()?, format!("{}{}", host, path))
         .basic_auth("user", Some(""))
+        .header("Content-Type", "application/xml; charset=utf-8")
+        .header("Depth", "0")
         .body(
             r#"
             <D:propfind xmlns:D="DAV:">
@@ -150,6 +150,7 @@ fn fetch_current_user_principal_url(host: &str, path: String, client: &Client) -
         .send()
         .map_err(|_| CardamomError::UnknownError)?;
     let res = res.text().map_err(|_| CardamomError::UnknownError)?;
+    println!("current user principal: {:?}", res);
     let res: Multistatus<CurrentUserPrincipalProp> =
         xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
     let path = res
@@ -171,6 +172,8 @@ fn fetch_addressbook_home_set_url(host: &str, path: String, client: &Client) -> 
     let res = client
         .request(propfind()?, format!("{}{}", host, path))
         .basic_auth("user", Some(""))
+        .header("Content-Type", "application/xml; charset=utf-8")
+        .header("Depth", "0")
         .body(
             r#"
             <D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
@@ -183,6 +186,7 @@ fn fetch_addressbook_home_set_url(host: &str, path: String, client: &Client) -> 
         .send()
         .map_err(|_| CardamomError::UnknownError)?;
     let res = res.text().map_err(|_| CardamomError::UnknownError)?;
+    println!("addressbook home set: {:?}", res);
     let res: Multistatus<AddressbookHomeSetProp> =
         xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
     let path = res
@@ -195,13 +199,23 @@ fn fetch_addressbook_home_set_url(host: &str, path: String, client: &Client) -> 
 
 fn fetch_addressbook_url(host: &str, path: String, client: &Client) -> Result<String> {
     let res = client
-        .request(propfind()?, host)
+        .request(propfind()?, format!("{}{}", host, path))
         .basic_auth("user", Some(""))
+        .header("Content-Type", "application/xml; charset=utf-8")
+        .header("Depth", "1")
+        .body(
+            r#"
+            <D:propfind xmlns:D="DAV:">
+              <D:prop>
+                <D:resourcetype />
+              </D:prop>
+            </D:propfind>
+            "#,
+        )
         .send()
         .map_err(|_| CardamomError::UnknownError)?;
     let res = res.text().map_err(|_| CardamomError::UnknownError)?;
-    let res: Multistatus<AddressbookProp> =
-        xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
+    let res: Multistatus<AddressbookProp> = xml::from_str(&res).unwrap();
     let path = res
         .responses
         .iter()
@@ -219,7 +233,6 @@ fn fetch_addressbook_url(host: &str, path: String, client: &Client) -> Result<St
                 .addressbook
                 .as_ref()
                 .is_some();
-
             valid_status && has_addressbook
         })
         .map(|res| res.href.value.to_owned())
@@ -233,49 +246,4 @@ pub fn addressbook_path(host: &str, client: &Client) -> Result<String> {
     let path = fetch_addressbook_home_set_url(host, path, client)?;
     let path = fetch_addressbook_url(host, path, client)?;
     Ok(path)
-}
-
-pub fn fetch_all_cards(path: &str, client: &Client) -> Result<Cards> {
-    let res = client
-        .request(report()?, path)
-        .basic_auth("user", Some(""))
-        .header("Depth", "1")
-        .body(
-            r#"
-            <C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
-                <D:prop>
-                    <D:getetag />
-                    <D:getlastmodified />
-                    <C:address-data />
-                </D:prop>
-            </C:addressbook-query>
-            "#,
-        )
-        .send()
-        .map_err(|_| CardamomError::UnknownError)?;
-    let res = res.text().map_err(|_| CardamomError::UnknownError)?;
-    let res: Multistatus<AddressDataProp> =
-        xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
-
-    let cards = res
-        .responses
-        .iter()
-        .fold(Cards::default(), |mut cards, res| {
-            let card = Card {
-                id: PathBuf::from(&res.href.value)
-                    .file_stem()
-                    .unwrap()
-                    .to_string_lossy()
-                    .to_string(),
-                etag: res.propstat.prop.getetag.value.to_owned(),
-                url: res.href.value.parse().unwrap(),
-                path: PathBuf::new(),
-                date: res.propstat.prop.getlastmodified.value,
-                content: String::new(),
-            };
-            cards.insert(card.id.to_owned(), card);
-            cards
-        });
-
-    Ok(cards)
 }

@@ -1,9 +1,15 @@
 use std::path::PathBuf;
 
 use chrono::{DateTime, Local};
-use reqwest::blocking::Client;
+use quick_xml::de as xml;
+use reqwest::{blocking::Client, header::CONTENT_TYPE};
 
-use crate::{card::Card, card_repository::CardRepository, carddav::addressbook_path, error::*};
+use crate::{
+    card::{Card, Cards},
+    card_repository::CardRepository,
+    carddav::{addressbook_path, report, AddressDataProp, Multistatus},
+    error::*,
+};
 
 #[derive(Debug)]
 pub struct RemoteCardRepository<'a> {
@@ -21,12 +27,12 @@ impl<'a> RemoteCardRepository<'a> {
 }
 
 impl<'a> CardRepository for RemoteCardRepository<'a> {
-    fn create(&self, card: &mut Card) -> Result<()> {
+    fn insert(&self, card: &mut Card) -> Result<()> {
         let res = self
             .client
             .put(format!("{}{}.vcf", self.addressbook_path, card.id))
             .basic_auth("user", Some(""))
-            .header("Content-Type", "text/vcard; charset=utf-8")
+            .header(CONTENT_TYPE, "text/vcard; charset=utf-8")
             .body(card.content.clone())
             .send()
             .map_err(|_| CardamomError::UnknownError)?;
@@ -38,6 +44,7 @@ impl<'a> CardRepository for RemoteCardRepository<'a> {
             // return Err(anyhow!(reason).context("cannot create card"));
         }
 
+        println!("res: {:?}", res);
         card.etag = res
             .headers()
             .get("etag")
@@ -48,7 +55,7 @@ impl<'a> CardRepository for RemoteCardRepository<'a> {
         Ok(())
     }
 
-    fn read(&self, id: &str) -> Result<Card> {
+    fn select(&self, id: &str) -> Result<Card> {
         let res = self
             .client
             .get(format!("{}{}.vcf", self.addressbook_path, id))
@@ -83,10 +90,56 @@ impl<'a> CardRepository for RemoteCardRepository<'a> {
             id: id.to_owned(),
             etag,
             date,
-            path: PathBuf::new(),
-            url: "http://localhost/".parse().unwrap(),
             content,
         })
+    }
+
+    fn select_all(&self) -> Result<Cards> {
+        println!("self.addressbook_path: {:?}", self.addressbook_path);
+        let res = self
+            .client
+            .request(report()?, self.addressbook_path.clone())
+            .basic_auth("user", Some(""))
+            .header("Content-Type", "application/xml; charset=utf-8")
+            .header("Depth", "0")
+            .body(
+                r#"
+                <C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
+                    <D:prop>
+                        <D:getetag />
+                        <D:getlastmodified />
+                        <C:address-data />
+                    </D:prop>
+                </C:addressbook-query>
+            "#,
+            )
+            .send()
+            .map_err(CardamomError::FetchRemoteCardsError)?;
+        let res = res.text().map_err(CardamomError::FetchRemoteCardsError)?;
+        println!("select all: {:?}", res);
+        let res: Multistatus<AddressDataProp> =
+            xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
+        println!("select all: {:?}", res);
+
+        let cards = res
+            .responses
+            .iter()
+            .fold(Cards::default(), |mut cards, res| {
+                let card = Card {
+                    id: PathBuf::from(&res.href.value)
+                        .file_stem()
+                        .unwrap()
+                        .to_string_lossy()
+                        .to_string(),
+                    etag: res.propstat.prop.getetag.value.to_owned(),
+                    date: res.propstat.prop.getlastmodified.value,
+                    content: String::default(),
+                };
+                cards.insert(card.id.to_owned(), card);
+                cards
+            });
+
+        Ok(cards)
     }
 
     fn update(&self, card: &mut Card) -> Result<()> {

@@ -5,25 +5,25 @@ pub mod carddav;
 pub mod error;
 pub mod remote_card_repository;
 
-use std::{collections::HashSet, path::PathBuf};
+use std::{collections::HashSet, fs, path::PathBuf};
 
 use crate::{card::*, error::*};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Hunk {
+pub enum Hunk {
     Local(HunkKind),
     Cache(HunkKind),
     Remote(HunkKind),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum HunkKind {
+pub enum HunkKind {
     Add(Card),
     Set(Card),
     Del(String),
 }
 
-type Patch = Vec<Hunk>;
+pub type Patch = Vec<Hunk>;
 
 fn build_cached_cards(path: PathBuf) -> Result<Cards> {
     let reader = std::fs::OpenOptions::new()
@@ -35,45 +35,42 @@ fn build_cached_cards(path: PathBuf) -> Result<Cards> {
     serde_json::from_reader(reader).map_err(|_| CardamomError::UnknownError)
 }
 
-// fn build_local_cards(cache: &Cards, dir: PathBuf) -> Result<Cards> {
-//     Ok(fs::read_dir(dir)
-//         .map_err(|_| CardamomError::Unknown)?
-//         .filter_map(|entry| match entry {
-//             Err(_) => None,
-//             Ok(entry) => {
-//                 let is_entry_vcf = entry
-//                     .path()
-//                     .extension()
-//                     .map(|ext| ext == "vcf")
-//                     .unwrap_or_default();
-//                 if is_entry_vcf {
-//                     Some(entry)
-//                 } else {
-//                     None
-//                 }
-//             }
-//         })
-//         .fold(Cards::default(), |mut cards, entry| {
-//             match PathBuf::from(entry.path()).file_stem() {
-//                 None => cards,
-//                 Some(name) => {
-//                     let card = Card {
-//                         name: name.to_string_lossy().to_string(),
-//                         date: entry.metadata().unwrap().modified().unwrap().into(),
-//                     };
-
-//                     cards.insert(name.to_string_lossy().to_string(), card);
-//                     cards
-//                 }
-//             }
-//         }))
-// }
-
-fn build_remote_cards(path: PathBuf) -> Result<Cards> {
-    Ok(Cards::default())
+pub fn build_local_cards(dir: PathBuf) -> Result<Cards> {
+    Ok(fs::read_dir(dir)
+        .map_err(|_| CardamomError::UnknownError)?
+        .filter_map(|entry| match entry {
+            Err(_) => None,
+            Ok(entry) => {
+                let is_entry_vcf = entry
+                    .path()
+                    .extension()
+                    .map(|ext| ext == "vcf")
+                    .unwrap_or_default();
+                if is_entry_vcf {
+                    Some(entry)
+                } else {
+                    None
+                }
+            }
+        })
+        .fold(Cards::default(), |mut cards, entry| {
+            match PathBuf::from(entry.path()).file_stem() {
+                None => cards,
+                Some(name) => {
+                    let card = Card {
+                        id: name.to_string_lossy().to_string(),
+                        etag: String::default(),
+                        date: entry.metadata().unwrap().modified().unwrap().into(),
+                        content: String::default(),
+                    };
+                    cards.insert(card.id.clone(), card);
+                    cards
+                }
+            }
+        }))
 }
 
-fn build_patch(local: Cards, cache: Cards, remote: Cards) -> Patch {
+pub fn build_patch(local: Cards, cache: Cards, remote: Cards) -> Patch {
     let mut ids = HashSet::new();
     ids.extend(local.iter().map(|(id, _)| id.as_str()));
     ids.extend(cache.iter().map(|(id, _)| id.as_str()));
@@ -186,8 +183,6 @@ mod tests {
         ($id: literal) => {
             Card {
                 id: format!("{}", $id),
-                path: format!("/tmp/{}.vcard", $id).into(),
-                url: format!("http://localhost/{}", $id).parse().unwrap(),
                 etag: format!("{}", $id),
                 date: date!("2022-01-02"),
                 content: String::new(),
@@ -201,8 +196,6 @@ mod tests {
                 format!("{}", $id),
                 Card {
                     id: format!("{}", $id),
-                    path: format!("/tmp/{}.vcard", $id).into(),
-                    url: format!("http://localhost/{}", $id).parse().unwrap(),
                     etag: format!("{}", $id),
                     date: date!("2022-01-02"),
                     content: String::new(),
