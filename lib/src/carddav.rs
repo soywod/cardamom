@@ -1,125 +1,130 @@
-use chrono::{DateTime, Local};
+//! CardDAV module
+//!
+//! This module contains everything to interact with CardDAV servers.
+
 use quick_xml::de as xml;
 use reqwest::{blocking::Client, Method};
 use serde::Deserialize;
 
-use crate::{card_parsers::date_parser, error::*};
+use crate::error::*;
 
-// Multistatus structs
-
-#[derive(Debug, Deserialize)]
-pub struct Status {
-    #[serde(rename = "$value")]
-    pub value: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Propstat<T> {
-    pub prop: T,
-    pub status: Option<Status>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Href {
-    #[serde(rename = "$value")]
-    pub value: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Response<T> {
-    pub href: Href,
-    pub propstat: Propstat<T>,
-}
-
+/// Represents the CardDAV response wrapper. The CardDAV response
+/// wraps multiple `response` in a single `multistatus`.
+///
+/// ```xml
+/// <multistatus xmlns="DAV:">
+///     <response>
+///         ...
+///     </response>
+///     <response>
+///         ...
+///     </response>
+///     ...
+/// </multistatus>
+/// ```
 #[derive(Debug, Deserialize)]
 pub struct Multistatus<T> {
-    #[serde(rename = "response")]
+    #[serde(rename = "response", default)]
     pub responses: Vec<Response<T>>,
 }
 
-// Other structs
-
+/// Represents the CardDAV response. The CardDAV response contains a
+/// `href` and many `propstat`.
+///
+/// ```xml
+/// <response>
+///     <href>/path</href>
+///     <propstat>
+///         ...
+///     </propstat>
+///     <propstat>
+///         ...
+///     </propstat>
+///     ...
+/// <response>
+/// ```
 #[derive(Debug, Deserialize)]
-pub struct GetCtag {
-    #[serde(rename = "$value")]
-    pub value: String,
+pub struct Response<T> {
+    pub href: String,
+    #[serde(default)]
+    pub propstat: Vec<Propstat<T>>,
 }
 
+/// Represents the properties wrapper associated to the CardDAV
+/// response. The propstat contains a property `prop` and sometimes a
+/// `status` code.
+///
+/// ```xml
+/// <propstat>
+///     <prop>
+///         ...
+///     </prop>
+///     <status>HTTP/1.1 200 OK</status>
+/// </propstat>
+/// ```
 #[derive(Debug, Deserialize)]
-pub struct GetEtag {
-    #[serde(rename = "$value")]
-    pub value: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct GetLastModified {
-    #[serde(with = "date_parser", rename = "$value")]
-    pub value: DateTime<Local>,
+pub struct Propstat<T> {
+    pub prop: T,
+    pub status: Option<String>,
 }
 
 // Current user principal structs
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct CurrentUserPrincipalProp {
     pub current_user_principal: CurrentUserPrincipal,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct CurrentUserPrincipal {
-    pub href: Href,
+    pub href: String,
 }
 
 // Addressbook home set structs
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct AddressbookHomeSetProp {
     pub addressbook_home_set: AddressbookHomeSet,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct AddressbookHomeSet {
-    pub href: Href,
+    pub href: String,
 }
 
 // Addressbook structs
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct AddressbookProp {
     pub resourcetype: AddressbookResourceType,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct AddressbookResourceType {
     pub addressbook: Option<Addressbook>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Addressbook {}
 
 // Address data structs
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct AddressDataProp {
-    pub address_data: AddressData,
-    pub getetag: GetEtag,
-    pub getlastmodified: GetLastModified,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AddressData {
-    #[serde(rename = "$value")]
-    pub value: String,
+    pub address_data: Option<String>,
+    pub getetag: Option<String>,
+    pub getlastmodified: Option<String>,
 }
 
 // Ctag structs
 
 #[derive(Debug, Deserialize)]
 pub struct CtagProp {
-    pub getctag: GetCtag,
+    pub getctag: String,
 }
 
 // Methods
@@ -140,30 +145,23 @@ fn fetch_current_user_principal_url(host: &str, path: String, client: &Client) -
         .header("Depth", "0")
         .body(
             r#"
-            <D:propfind xmlns:D="DAV:">
-                <D:prop>
-                    <D:current-user-principal />
-                </D:prop>
-            </D:propfind>
+            <propfind xmlns="DAV:">
+                <prop>
+                    <current-user-principal />
+                </prop>
+            </propfind>
             "#,
         )
         .send()
         .map_err(|_| CardamomError::UnknownError)?;
     let res = res.text().map_err(|_| CardamomError::UnknownError)?;
-    println!("current user principal: {:?}", res);
     let res: Multistatus<CurrentUserPrincipalProp> =
         xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
     let path = res
         .responses
         .first()
-        .map(|res| {
-            res.propstat
-                .prop
-                .current_user_principal
-                .href
-                .value
-                .to_owned()
-        })
+        .and_then(|res| res.propstat.first())
+        .map(|propstat| propstat.prop.current_user_principal.href.to_owned())
         .unwrap_or(path);
     Ok(path)
 }
@@ -176,23 +174,23 @@ fn fetch_addressbook_home_set_url(host: &str, path: String, client: &Client) -> 
         .header("Depth", "0")
         .body(
             r#"
-            <D:propfind xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
-                <D:prop>
-                    <C:addressbook-home-set />
-                </D:prop>
-            </D:propfind>
+            <propfind xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav">
+                <prop>
+                    <c:addressbook-home-set />
+                </prop>
+            </propfind>
             "#,
         )
         .send()
         .map_err(|_| CardamomError::UnknownError)?;
     let res = res.text().map_err(|_| CardamomError::UnknownError)?;
-    println!("addressbook home set: {:?}", res);
     let res: Multistatus<AddressbookHomeSetProp> =
         xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
     let path = res
         .responses
         .first()
-        .map(|res| res.propstat.prop.addressbook_home_set.href.value.to_owned())
+        .and_then(|res| res.propstat.first())
+        .map(|propstat| propstat.prop.addressbook_home_set.href.to_owned())
         .unwrap_or(path);
     Ok(path)
 }
@@ -205,11 +203,11 @@ fn fetch_addressbook_url(host: &str, path: String, client: &Client) -> Result<St
         .header("Depth", "1")
         .body(
             r#"
-            <D:propfind xmlns:D="DAV:">
-              <D:prop>
-                <D:resourcetype />
-              </D:prop>
-            </D:propfind>
+            <propfind xmlns="DAV:">
+                <prop>
+                    <resourcetype />
+                </prop>
+            </propfind>
             "#,
         )
         .send()
@@ -219,23 +217,20 @@ fn fetch_addressbook_url(host: &str, path: String, client: &Client) -> Result<St
     let path = res
         .responses
         .iter()
-        .find(|res| {
-            let valid_status = res
-                .propstat
-                .status
-                .as_ref()
-                .map(|s| s.value.ends_with("200 OK"))
-                .unwrap_or(false);
-            let has_addressbook = res
-                .propstat
-                .prop
-                .resourcetype
-                .addressbook
-                .as_ref()
-                .is_some();
-            valid_status && has_addressbook
+        .find_map(|res| {
+            res.propstat
+                .iter()
+                .find(|propstat| {
+                    let valid_status = propstat
+                        .status
+                        .as_ref()
+                        .map(|s| s.ends_with("200 OK"))
+                        .unwrap_or(false);
+                    let has_addressbook = propstat.prop.resourcetype.addressbook.as_ref().is_some();
+                    valid_status && has_addressbook
+                })
+                .map(|_| res.href.to_owned())
         })
-        .map(|res| res.href.value.to_owned())
         .unwrap_or(path);
     Ok(path)
 }
@@ -246,4 +241,113 @@ pub fn addressbook_path(host: &str, client: &Client) -> Result<String> {
     let path = fetch_addressbook_home_set_url(host, path, client)?;
     let path = fetch_addressbook_url(host, path, client)?;
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use quick_xml::de as xml;
+
+    use super::*;
+
+    #[test]
+    fn empty_response() {
+        let res: Multistatus<String> = xml::from_str(r#"<multistatus xmlns="DAV:" />"#).unwrap();
+        assert_eq!(0, res.responses.len());
+    }
+
+    #[test]
+    fn single_propstat() {
+        let res: Multistatus<String> = xml::from_str(
+            r#"
+            <multistatus xmlns="DAV:">
+	        <response>
+		    <href>/path</href>
+                    <propstat>
+			<prop>data</prop>
+			<status>HTTP/1.1 200 OK</status>
+		    </propstat>
+	        </response>
+            </multistatus>
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(1, res.responses.len());
+        assert_eq!("/path", res.responses[0].href);
+        assert_eq!(1, res.responses[0].propstat.len());
+        assert_eq!("data", res.responses[0].propstat[0].prop);
+        assert_eq!(
+            Some("HTTP/1.1 200 OK"),
+            res.responses[0].propstat[0]
+                .status
+                .as_ref()
+                .map(|s| s.as_ref())
+        );
+    }
+
+    #[test]
+    fn multiple_propstats() {
+        #[derive(Debug, Default, Deserialize)]
+        struct Response {
+            getetag: Option<String>,
+            getlastmodified: Option<String>,
+        }
+
+        let res: Multistatus<Response> = xml::from_str(
+            r#"
+            <multistatus xmlns="DAV:">
+	        <response>
+		    <href>/path</href>
+                    <propstat>
+			<prop>
+                            <getetag>etag</getetag>
+                        </prop>
+			<status>HTTP/1.1 200 OK</status>
+		    </propstat>
+                    <propstat>
+			<prop>
+                            <getlastmodified />
+                        </prop>
+			<status>HTTP/1.1 404 Not Found</status>
+		    </propstat>
+	        </response>
+            </multistatus>
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(1, res.responses.len());
+        assert_eq!("/path", res.responses[0].href);
+        assert_eq!(2, res.responses[0].propstat.len());
+        assert_eq!(
+            Some("etag"),
+            res.responses[0].propstat[0]
+                .prop
+                .getetag
+                .as_ref()
+                .map(|etag| etag.as_ref())
+        );
+        assert_eq!(
+            Some("HTTP/1.1 200 OK"),
+            res.responses[0].propstat[0]
+                .status
+                .as_ref()
+                .map(|v| v.as_ref())
+        );
+        assert_eq!(
+            Some(""),
+            res.responses[0].propstat[1]
+                .prop
+                .getlastmodified
+                .as_ref()
+                .map(|v| v.as_ref())
+        );
+        assert_eq!(
+            Some("HTTP/1.1 404 Not Found"),
+            res.responses[0].propstat[1]
+                .status
+                .as_ref()
+                .map(|s| s.as_ref())
+        );
+    }
 }

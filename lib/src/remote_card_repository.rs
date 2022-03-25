@@ -44,7 +44,6 @@ impl<'a> CardRepository for RemoteCardRepository<'a> {
             // return Err(anyhow!(reason).context("cannot create card"));
         }
 
-        println!("res: {:?}", res);
         card.etag = res
             .headers()
             .get("etag")
@@ -95,7 +94,6 @@ impl<'a> CardRepository for RemoteCardRepository<'a> {
     }
 
     fn select_all(&self) -> Result<Cards> {
-        println!("self.addressbook_path: {:?}", self.addressbook_path);
         let res = self
             .client
             .request(report()?, self.addressbook_path.clone())
@@ -104,35 +102,53 @@ impl<'a> CardRepository for RemoteCardRepository<'a> {
             .header("Depth", "0")
             .body(
                 r#"
-                <C:addressbook-query xmlns:D="DAV:" xmlns:C="urn:ietf:params:xml:ns:carddav">
-                    <D:prop>
-                        <D:getetag />
-                        <D:getlastmodified />
-                        <C:address-data />
-                    </D:prop>
-                </C:addressbook-query>
+                <c:addressbook-query xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav">
+                    <prop>
+                        <getetag />
+                        <c:address-data />
+                    </prop>
+                </c:addressbook-query>
             "#,
             )
             .send()
             .map_err(CardamomError::FetchRemoteCardsError)?;
         let res = res.text().map_err(CardamomError::FetchRemoteCardsError)?;
-        println!("select all: {:?}", res);
         let res: Multistatus<AddressDataProp> =
             xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
-        println!("select all: {:?}", res);
+        println!("res: {:?}", res);
 
         let cards = res
             .responses
             .iter()
             .fold(Cards::default(), |mut cards, res| {
                 let card = Card {
-                    id: PathBuf::from(&res.href.value)
+                    id: PathBuf::from(&res.href)
                         .file_stem()
                         .unwrap()
                         .to_string_lossy()
                         .to_string(),
-                    etag: res.propstat.prop.getetag.value.to_owned(),
-                    date: res.propstat.prop.getlastmodified.value,
+                    etag: res
+                        .propstat
+                        .first()
+                        .unwrap()
+                        .prop
+                        .getetag
+                        .as_ref()
+                        .map(|s| s.to_owned())
+                        .unwrap_or_default(),
+                    date: res
+                        .propstat
+                        .first()
+                        .unwrap()
+                        .prop
+                        .getlastmodified
+                        .as_ref()
+                        .map(|d| {
+                            DateTime::parse_from_rfc2822(d.as_ref())
+                                .map(|d| d.into())
+                                .unwrap()
+                        })
+                        .unwrap_or(Local::now()),
                     content: String::default(),
                 };
                 cards.insert(card.id.to_owned(), card);
