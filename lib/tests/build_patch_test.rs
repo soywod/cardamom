@@ -1,7 +1,7 @@
 use chrono::Local;
 use reqwest::blocking::Client;
 
-use cardamom_lib::{
+use cardamom::{
     card::Card, card_repository::CardRepository, error::*,
     remote_card_repository::RemoteCardRepository,
 };

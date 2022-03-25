@@ -25,14 +25,47 @@ pub enum HunkKind {
 
 pub type Patch = Vec<Hunk>;
 
-fn build_cached_cards(path: PathBuf) -> Result<Cards> {
-    let reader = std::fs::OpenOptions::new()
+pub fn sync(path: PathBuf) -> Result<()> {
+    let cache_reader = fs::OpenOptions::new()
         .read(true)
         .write(true)
         .create(true)
-        .open(path)
+        .open(&path)
         .map_err(|_| CardamomError::UnknownError)?;
-    serde_json::from_reader(reader).map_err(|_| CardamomError::UnknownError)
+    let cache = serde_json::from_reader(cache_reader).map_err(|_| CardamomError::UnknownError)?;
+    let local = fs::read_dir(&path)
+        .map_err(|_| CardamomError::UnknownError)?
+        .filter_map(|entry| match entry {
+            Err(_) => None,
+            Ok(entry) => {
+                let is_entry_vcf = entry
+                    .path()
+                    .extension()
+                    .map(|ext| ext == "vcf")
+                    .unwrap_or_default();
+                if is_entry_vcf {
+                    Some(entry)
+                } else {
+                    None
+                }
+            }
+        })
+        .fold(Cards::default(), |mut cards, entry| {
+            match PathBuf::from(entry.path()).file_stem() {
+                None => cards,
+                Some(name) => {
+                    let card = Card {
+                        id: name.to_string_lossy().to_string(),
+                        etag: String::default(),
+                        date: entry.metadata().unwrap().modified().unwrap().into(),
+                        content: String::default(),
+                    };
+                    cards.insert(card.id.clone(), card);
+                    cards
+                }
+            }
+        });
+    Ok(())
 }
 
 pub fn build_local_cards(dir: PathBuf) -> Result<Cards> {
