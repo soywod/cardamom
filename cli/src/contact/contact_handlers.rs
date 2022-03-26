@@ -5,7 +5,7 @@
 use anyhow::Result;
 use log::{info, trace};
 
-use cardamom_lib::{cache::CachedCards, local::LocalCards};
+use cardamom_lib::{cache::CachedCards, local::LocalCards, remote::RemoteCards};
 
 use crate::{config::AccountConfig, output::PrinterService};
 
@@ -18,6 +18,14 @@ pub fn sync<'a, P: PrinterService>(config: &AccountConfig, printer: &mut P) -> R
 
     let local = LocalCards::new(config.sync_dir.clone())?;
     trace!("local: {:?}", local);
+
+    let remote = RemoteCards::new(
+        config.host.clone(),
+        config.port.clone(),
+        config.login.clone(),
+        config.passwd()?,
+    )?;
+    trace!("remote: {:?}", remote);
 
     printer.print_str("TODO")?;
 

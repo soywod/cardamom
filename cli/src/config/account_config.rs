@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use log::{debug, info, trace};
 use std::{env, fs, path::PathBuf};
 
-use crate::config::*;
+use crate::{config::*, output::run_cmd};
 
 const CACHED_CARDS_FILE_NAME: &str = ".cache";
 
@@ -77,5 +77,14 @@ impl<'a> AccountConfig {
 
     pub fn cache_cards_file_path(&self) -> PathBuf {
         self.sync_dir.join(CACHED_CARDS_FILE_NAME)
+    }
+
+    pub fn passwd(&self) -> Result<String> {
+        let passwd = run_cmd(&self.passwd_cmd)
+            .with_context(|| format!("cannot run passwd cmd {:?}", self.passwd_cmd))?;
+        let passwd = passwd
+            .trim_end_matches(|c| c == '\r' || c == '\n')
+            .to_owned();
+        Ok(passwd)
     }
 }

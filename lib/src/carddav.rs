@@ -2,11 +2,191 @@
 //!
 //! This module contains everything to interact with CardDAV servers.
 
+use log::trace;
 use quick_xml::de as xml;
 use reqwest::{blocking::Client, Method};
 use serde::Deserialize;
+use url::Url;
 
 use crate::error::*;
+
+#[derive(Debug)]
+pub struct CardDavClient {
+    client: Client,
+    root_url: Url,
+    current_user_principal_url: Url,
+    addressbook_home_set_url: Url,
+    addressbook_url: Url,
+    login: String,
+    passwd: String,
+}
+
+impl CardDavClient {
+    pub fn new(host: String, port: u16, login: String, passwd: String) -> Result<Self> {
+        let root_url = format!("https://{}:{}", host, port);
+        let root_url =
+            Url::parse(&root_url).map_err(|e| CardamomError::ParseCardDavUrlError(root_url, e))?;
+
+        let mut client = Self {
+            client: Client::new(),
+            current_user_principal_url: root_url.clone(),
+            addressbook_home_set_url: root_url.clone(),
+            addressbook_url: root_url.clone(),
+            root_url,
+            login,
+            passwd,
+        };
+
+        client.update_current_user_principal_url()?;
+        client.update_addressbook_home_set_url()?;
+        client.update_addressbook_url()?;
+
+        Ok(client)
+    }
+
+    fn update_current_user_principal_url(&mut self) -> Result<()> {
+        let res = self
+            .client
+            .request(propfind()?, self.root_url.to_string())
+            .basic_auth(&self.login, Some(&self.passwd))
+            .header("Content-Type", "application/xml; charset=utf-8")
+            .header("Depth", "0")
+            .body(
+                r#"
+                <propfind xmlns="DAV:">
+                    <prop>
+                        <current-user-principal />
+                    </prop>
+                </propfind>
+                "#,
+            )
+            .send()
+            .map_err(CardamomError::FetchCurrentUserPrincipalUrlError)?;
+        let res = res
+            .text()
+            .map_err(CardamomError::FetchCurrentUserPrincipalUrlError)?;
+        trace!("current user principal url response: {}", res);
+        let res: Multistatus<CurrentUserPrincipalProp> =
+            xml::from_str(&res).map_err(CardamomError::ParseCurrentUserPrincipalUrlError)?;
+        let path = res
+            .responses
+            .first()
+            .and_then(|res| res.propstat.first())
+            .map(|propstat| propstat.prop.current_user_principal.href.to_owned())
+            .unwrap_or_else(|| self.root_url.path().to_owned());
+        self.current_user_principal_url.set_path(&path);
+        self.addressbook_home_set_url.set_path(&path);
+        self.addressbook_url.set_path(&path);
+        Ok(())
+    }
+
+    fn update_addressbook_home_set_url(&mut self) -> Result<()> {
+        let res = self
+            .client
+            .request(propfind()?, self.current_user_principal_url.to_string())
+            .basic_auth(&self.login, Some(&self.passwd))
+            .header("Content-Type", "application/xml; charset=utf-8")
+            .header("Depth", "0")
+            .body(
+                r#"
+                <propfind xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav">
+                    <prop>
+                        <c:addressbook-home-set />
+                    </prop>
+                </propfind>
+                "#,
+            )
+            .send()
+            .map_err(CardamomError::FetchAddressbookHomeSetUrlError)?;
+        let res = res
+            .text()
+            .map_err(CardamomError::FetchAddressbookHomeSetUrlError)?;
+        trace!("addressbook home set url response: {}", res);
+        let res: Multistatus<AddressbookHomeSetProp> =
+            xml::from_str(&res).map_err(CardamomError::ParseAddressbookHomeSetUrlError)?;
+        let path = res
+            .responses
+            .first()
+            .and_then(|res| res.propstat.first())
+            .map(|propstat| propstat.prop.addressbook_home_set.href.to_owned())
+            .unwrap_or_else(|| self.current_user_principal_url.path().to_owned());
+        self.addressbook_home_set_url.set_path(&path);
+        self.addressbook_url.set_path(&path);
+        Ok(())
+    }
+
+    fn update_addressbook_url(&mut self) -> Result<()> {
+        let res = self
+            .client
+            .request(propfind()?, self.addressbook_home_set_url.to_string())
+            .basic_auth(&self.login, Some(&self.passwd))
+            .header("Content-Type", "application/xml; charset=utf-8")
+            .header("Depth", "1")
+            .body(
+                r#"
+                <propfind xmlns="DAV:">
+                    <prop>
+                        <resourcetype />
+                    </prop>
+                </propfind>
+                "#,
+            )
+            .send()
+            .map_err(CardamomError::FetchAddressbookUrlError)?;
+        let res = res
+            .text()
+            .map_err(CardamomError::FetchAddressbookUrlError)?;
+        trace!("addressbook url response: {}", res);
+        let res: Multistatus<AddressbookProp> =
+            xml::from_str(&res).map_err(CardamomError::ParseAddressbookUrlError)?;
+        let path = res
+            .responses
+            .iter()
+            .find_map(|res| {
+                res.propstat
+                    .iter()
+                    .find(|propstat| {
+                        let valid_status = propstat
+                            .status
+                            .as_ref()
+                            .map(|s| s.ends_with("200 OK"))
+                            .unwrap_or(false);
+                        let has_addressbook =
+                            propstat.prop.resourcetype.addressbook.as_ref().is_some();
+                        valid_status && has_addressbook
+                    })
+                    .map(|_| res.href.to_owned())
+            })
+            .unwrap_or_else(|| self.addressbook_home_set_url.path().to_owned());
+        self.addressbook_url.set_path(&path);
+        Ok(())
+    }
+
+    pub fn fetch_address_data(&self) -> Result<Multistatus<AddressDataProp>> {
+        let res = self
+            .client
+            .request(report()?, self.addressbook_url.to_string())
+            .basic_auth(&self.login, Some(&self.passwd))
+            .header("Content-Type", "application/xml; charset=utf-8")
+            .header("Depth", "1")
+            .body(
+                r#"
+                <c:addressbook-query xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav">
+                    <prop>
+                        <getetag />
+                        <getlastmodified />
+                        <c:address-data />
+                    </prop>
+                </c:addressbook-query>
+                "#,
+            )
+            .send()
+            .map_err(CardamomError::FetchAddressDataError)?;
+        let res = res.text().map_err(CardamomError::FetchAddressDataError)?;
+        trace!("address data response: {}", res);
+        xml::from_str(&res).map_err(CardamomError::ParseAddressDataError)
+    }
+}
 
 /// Represents the CardDAV response wrapper. The CardDAV response
 /// wraps multiple `response` in a single `multistatus`.
@@ -135,112 +315,6 @@ fn propfind() -> Result<Method> {
 
 pub fn report() -> Result<Method> {
     Method::from_bytes(b"REPORT").map_err(|_| CardamomError::UnknownError)
-}
-
-fn fetch_current_user_principal_url(host: &str, path: String, client: &Client) -> Result<String> {
-    let res = client
-        .request(propfind()?, format!("{}{}", host, path))
-        .basic_auth("user", Some(""))
-        .header("Content-Type", "application/xml; charset=utf-8")
-        .header("Depth", "0")
-        .body(
-            r#"
-            <propfind xmlns="DAV:">
-                <prop>
-                    <current-user-principal />
-                </prop>
-            </propfind>
-            "#,
-        )
-        .send()
-        .map_err(|_| CardamomError::UnknownError)?;
-    let res = res.text().map_err(|_| CardamomError::UnknownError)?;
-    let res: Multistatus<CurrentUserPrincipalProp> =
-        xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
-    let path = res
-        .responses
-        .first()
-        .and_then(|res| res.propstat.first())
-        .map(|propstat| propstat.prop.current_user_principal.href.to_owned())
-        .unwrap_or(path);
-    Ok(path)
-}
-
-fn fetch_addressbook_home_set_url(host: &str, path: String, client: &Client) -> Result<String> {
-    let res = client
-        .request(propfind()?, format!("{}{}", host, path))
-        .basic_auth("user", Some(""))
-        .header("Content-Type", "application/xml; charset=utf-8")
-        .header("Depth", "0")
-        .body(
-            r#"
-            <propfind xmlns="DAV:" xmlns:c="urn:ietf:params:xml:ns:carddav">
-                <prop>
-                    <c:addressbook-home-set />
-                </prop>
-            </propfind>
-            "#,
-        )
-        .send()
-        .map_err(|_| CardamomError::UnknownError)?;
-    let res = res.text().map_err(|_| CardamomError::UnknownError)?;
-    let res: Multistatus<AddressbookHomeSetProp> =
-        xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
-    let path = res
-        .responses
-        .first()
-        .and_then(|res| res.propstat.first())
-        .map(|propstat| propstat.prop.addressbook_home_set.href.to_owned())
-        .unwrap_or(path);
-    Ok(path)
-}
-
-fn fetch_addressbook_url(host: &str, path: String, client: &Client) -> Result<String> {
-    let res = client
-        .request(propfind()?, format!("{}{}", host, path))
-        .basic_auth("user", Some(""))
-        .header("Content-Type", "application/xml; charset=utf-8")
-        .header("Depth", "1")
-        .body(
-            r#"
-            <propfind xmlns="DAV:">
-                <prop>
-                    <resourcetype />
-                </prop>
-            </propfind>
-            "#,
-        )
-        .send()
-        .map_err(|_| CardamomError::UnknownError)?;
-    let res = res.text().map_err(|_| CardamomError::UnknownError)?;
-    let res: Multistatus<AddressbookProp> = xml::from_str(&res).unwrap();
-    let path = res
-        .responses
-        .iter()
-        .find_map(|res| {
-            res.propstat
-                .iter()
-                .find(|propstat| {
-                    let valid_status = propstat
-                        .status
-                        .as_ref()
-                        .map(|s| s.ends_with("200 OK"))
-                        .unwrap_or(false);
-                    let has_addressbook = propstat.prop.resourcetype.addressbook.as_ref().is_some();
-                    valid_status && has_addressbook
-                })
-                .map(|_| res.href.to_owned())
-        })
-        .unwrap_or(path);
-    Ok(path)
-}
-
-pub fn addressbook_path(host: &str, client: &Client) -> Result<String> {
-    let path = String::from("/");
-    let path = fetch_current_user_principal_url(host, path, client)?;
-    let path = fetch_addressbook_home_set_url(host, path, client)?;
-    let path = fetch_addressbook_url(host, path, client)?;
-    Ok(path)
 }
 
 #[cfg(test)]

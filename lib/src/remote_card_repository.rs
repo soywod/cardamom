@@ -7,7 +7,7 @@ use reqwest::{blocking::Client, header::CONTENT_TYPE};
 use crate::{
     card::{Card, Cards},
     card_repository::CardRepository,
-    carddav::{addressbook_path, report, AddressDataProp, Multistatus},
+    carddav::{report, AddressDataProp, Multistatus},
     error::*,
 };
 
@@ -20,7 +20,7 @@ pub struct RemoteCardRepository<'a> {
 impl<'a> RemoteCardRepository<'a> {
     pub fn new(host: &str, client: &'a Client) -> Result<Self> {
         Ok(Self {
-            addressbook_path: format!("{}{}", host, addressbook_path(host, client)?),
+            addressbook_path: String::default(),
             client,
         })
     }
@@ -111,8 +111,8 @@ impl<'a> CardRepository for RemoteCardRepository<'a> {
             "#,
             )
             .send()
-            .map_err(CardamomError::FetchRemoteCardsError)?;
-        let res = res.text().map_err(CardamomError::FetchRemoteCardsError)?;
+            .map_err(CardamomError::FetchAddressDataError)?;
+        let res = res.text().map_err(CardamomError::FetchAddressDataError)?;
         let res: Multistatus<AddressDataProp> =
             xml::from_str(&res).map_err(|_| CardamomError::UnknownError)?;
         println!("res: {:?}", res);

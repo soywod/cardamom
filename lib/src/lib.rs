@@ -7,6 +7,7 @@ pub mod remote_card_repository;
 
 pub mod cache;
 pub mod local;
+pub mod remote;
 
 use std::{collections::HashSet, fs, path::PathBuf};
 

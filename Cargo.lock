@@ -92,6 +92,7 @@ name = "cardamom-lib"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "log",
  "quick-xml",
  "reqwest",
  "serde",
