@@ -1,34 +1,20 @@
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    ops::{Deref, DerefMut},
-};
+use std::collections::HashMap;
 
 use crate::card_parsers::date_parser;
+
+pub type CardsMap = HashMap<String, Card>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Card {
     pub id: String,
-    pub etag: String,
     #[serde(with = "date_parser")]
     pub date: DateTime<Local>,
     pub content: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Cards(pub HashMap<String, Card>);
-
-impl Deref for Cards {
-    type Target = HashMap<String, Card>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for Cards {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
+pub trait Cards {
+    fn prev(&self) -> &CardsMap;
+    fn next(&self) -> &CardsMap;
 }

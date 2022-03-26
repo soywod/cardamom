@@ -1,12 +1,13 @@
-use std::{collections::HashSet, fs, path::PathBuf};
+use std::collections::HashSet;
 
-use crate::{card::*, error::*};
+use crate::card::*;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Hunk {
-    Local(HunkKind),
-    Cache(HunkKind),
-    Remote(HunkKind),
+    PrevLeft(HunkKind),
+    NextLeft(HunkKind),
+    PrevRight(HunkKind),
+    NextRight(HunkKind),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,93 +23,248 @@ pub struct Patch {
 }
 
 impl Patch {
-    pub fn new(cache: Cards, local: Cards, remote: Cards) -> Self {
+    pub fn new(left: impl Cards, right: impl Cards) -> Self {
         let mut ids = HashSet::new();
-        ids.extend(local.iter().map(|(id, _)| id.as_str()));
-        ids.extend(cache.iter().map(|(id, _)| id.as_str()));
-        ids.extend(remote.iter().map(|(id, _)| id.as_str()));
+        //ids.extend(left.prev().iter().map(|(id, _)| id.as_str()));
+        ids.extend(left.next().iter().map(|(id, _)| id.as_str()));
+        //ids.extend(right.prev().iter().map(|(id, _)| id.as_str()));
+        ids.extend(right.next().iter().map(|(id, _)| id.as_str()));
 
         let mut hunks = Vec::new();
 
+        // given the matrice left.prev × left.next × right.prev × right.next,
+        // check every 2⁴ = 16 possibilities:
         for id in ids {
-            // id present only in local cards
-            if local.contains_key(id) && !cache.contains_key(id) && !remote.contains_key(id) {
-                // add card to remote and cached cards
-                let card = local.get(id).unwrap();
-                hunks.push(Hunk::Remote(HunkKind::Add(card.clone())));
-                hunks.push(Hunk::Cache(HunkKind::Add(card.clone())));
+            let lp = left.prev().contains_key(id);
+            let ln = left.next().contains_key(id);
+            let rp = right.prev().contains_key(id);
+            let rn = right.next().contains_key(id);
+
+            // 0 (0000): id nowhere
+            if !lp && !ln && !rp && !rn {
+                // nothing to do
             }
 
-            // id present only in cached cards
-            if !local.contains_key(id) && cache.contains_key(id) && !remote.contains_key(id) {
-                // nothing to do, it means both local and remote card have
-                // been removed
-                hunks.push(Hunk::Cache(HunkKind::Del(id.to_owned())));
+            // 1 (0001): id only in next right cards, which means the
+            // card was added right
+            if !lp && !ln && !rp && rn {
+                let card = right.next().get(id).unwrap();
+
+                hunks.push(Hunk::PrevLeft(HunkKind::Add(card.to_owned())));
+                hunks.push(Hunk::NextLeft(HunkKind::Add(card.to_owned())));
+                hunks.push(Hunk::PrevRight(HunkKind::Add(card.to_owned())));
             }
 
-            // id present only in remote cards
-            if !local.contains_key(id) && !cache.contains_key(id) && remote.contains_key(id) {
-                // add card to local and cached cards
-                let card = remote.get(id).unwrap();
-                hunks.push(Hunk::Local(HunkKind::Add(card.clone())));
-                hunks.push(Hunk::Cache(HunkKind::Add(card.clone())));
+            // 2 (0010): id only in prev right cards, which means prev
+            // right card is obsolete
+            if !lp && !ln && rp && !rn {
+                hunks.push(Hunk::PrevRight(HunkKind::Del(id.to_owned())));
             }
 
-            // id present in local and cached cards
-            if local.contains_key(id) && cache.contains_key(id) && !remote.contains_key(id) {
-                // remove card from local and cached cards
-                hunks.push(Hunk::Local(HunkKind::Del(id.to_owned())));
-                hunks.push(Hunk::Cache(HunkKind::Del(id.to_owned())));
+            // 3 (0011): id in right cards, which means the previous
+            // synchro failed and left is not in phase with right
+            // anymore
+            if !lp && !ln && rp && rn {
+                let card = right.next().get(id).unwrap();
+
+                hunks.push(Hunk::PrevLeft(HunkKind::Add(card.to_owned())));
+                hunks.push(Hunk::NextLeft(HunkKind::Add(card.to_owned())));
+                hunks.push(Hunk::PrevRight(HunkKind::Set(card.to_owned())));
             }
 
-            // id present in remote and cached cards
-            if !local.contains_key(id) && cache.contains_key(id) && remote.contains_key(id) {
-                // remove card from remote and cached cards
-                hunks.push(Hunk::Remote(HunkKind::Del(id.to_owned())));
-                hunks.push(Hunk::Cache(HunkKind::Del(id.to_owned())));
+            // 4 (0100): id only in next left cards, which means a
+            // card was added left
+            if !lp && ln && !rp && !rn {
+                let card = left.next().get(id).unwrap();
+
+                hunks.push(Hunk::PrevRight(HunkKind::Add(card.to_owned())));
+                hunks.push(Hunk::NextRight(HunkKind::Add(card.to_owned())));
+                hunks.push(Hunk::PrevLeft(HunkKind::Add(card.to_owned())));
             }
 
-            // id present in remote and local cards
-            if local.contains_key(id) && !cache.contains_key(id) && remote.contains_key(id) {
-                // should never happen, this means that the same card has
-                // been added simultaneously locally and remotely
-            }
+            // 5 (0101): id in next left and next right cards, which
+            // means the same card was added both left and right at
+            // the same time — unlikely to happen
+            if !lp && ln && !rp && rn {
+                let left_card = left.next().get(id).unwrap();
+                let right_card = left.next().get(id).unwrap();
 
-            // id present everywhere
-            if local.contains_key(id) && cache.contains_key(id) && remote.contains_key(id) {
-                let lcard = local.get(id).unwrap();
-                let ccard = cache.get(id).unwrap();
-                let rcard = remote.get(id).unwrap();
-
-                // etags are all the same
-                if lcard.etag == ccard.etag && ccard.etag == rcard.etag {
-                    // nothing to do, it means all is up to date
+                if right_card.date > left_card.date {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Add(right_card.to_owned())));
+                    hunks.push(Hunk::NextLeft(HunkKind::Set(right_card.to_owned())));
+                    hunks.push(Hunk::PrevRight(HunkKind::Add(right_card.to_owned())));
+                } else {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Add(left_card.to_owned())));
+                    hunks.push(Hunk::PrevRight(HunkKind::Add(left_card.to_owned())));
+                    hunks.push(Hunk::NextRight(HunkKind::Set(left_card.to_owned())));
                 }
+            }
 
-                // local etag is different
-                if lcard.etag != ccard.etag && ccard.etag == rcard.etag {
-                    // update remote and cached card
-                    hunks.push(Hunk::Remote(HunkKind::Set(lcard.clone())));
-                    hunks.push(Hunk::Cache(HunkKind::Set(lcard.clone())));
+            // 6 (0110): id in next left and prev right cards, which
+            // means the card was added left and deleted right
+            if !lp && ln && rp && !rn {
+                let left_card = left.next().get(id).unwrap();
+                let right_card = right.prev().get(id).unwrap();
+
+                if right_card.date > left_card.date {
+                    hunks.push(Hunk::NextLeft(HunkKind::Del(id.to_owned())));
+                    hunks.push(Hunk::PrevRight(HunkKind::Del(id.to_owned())));
+                } else {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Add(left_card.to_owned())));
+                    hunks.push(Hunk::PrevRight(HunkKind::Set(left_card.to_owned())));
+                    hunks.push(Hunk::NextRight(HunkKind::Add(left_card.to_owned())));
                 }
+            }
 
-                // remote etag is different
-                if lcard.etag == ccard.etag && ccard.etag != rcard.etag {
-                    // update local and cached card
-                    hunks.push(Hunk::Local(HunkKind::Set(rcard.clone())));
-                    hunks.push(Hunk::Cache(HunkKind::Set(rcard.clone())));
-                }
+            // 7 (0111): id in next left and right cards, which means
+            // the card was added left and potentially modified right
+            if !lp && ln && rp && rn {
+                let left_card = left.next().get(id).unwrap();
+                let prev_right_card = right.prev().get(id).unwrap();
+                let next_right_card = right.next().get(id).unwrap();
 
-                // local and remote etags are different
-                if lcard.etag != ccard.etag && ccard.etag != rcard.etag {
-                    // update the most recent
-                    if lcard.date > rcard.date {
-                        hunks.push(Hunk::Remote(HunkKind::Set(lcard.clone())));
-                        hunks.push(Hunk::Cache(HunkKind::Set(lcard.clone())));
-                    } else {
-                        hunks.push(Hunk::Local(HunkKind::Set(rcard.clone())));
-                        hunks.push(Hunk::Cache(HunkKind::Set(rcard.clone())));
+                if next_right_card.date > left_card.date {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Add(next_right_card.to_owned())));
+                    hunks.push(Hunk::NextLeft(HunkKind::Set(next_right_card.to_owned())));
+                    if next_right_card.date > prev_right_card.date {
+                        hunks.push(Hunk::PrevRight(HunkKind::Set(next_right_card.to_owned())));
                     }
+                } else {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Add(left_card.to_owned())));
+                    hunks.push(Hunk::PrevRight(HunkKind::Set(left_card.to_owned())));
+                    hunks.push(Hunk::NextRight(HunkKind::Set(left_card.to_owned())));
+                }
+            }
+
+            // 8 (1000): id only in prev left cards, which means the
+            // prev left card is obsolete
+            if lp && !ln && !rp && !rn {
+                hunks.push(Hunk::PrevLeft(HunkKind::Del(id.to_owned())));
+            }
+
+            // 9 (1001): id in prev left and next right cards, which
+            // means a card was deleted left and added right
+            if lp && !ln && !rp && rn {
+                let left_card = left.prev().get(id).unwrap();
+                let right_card = right.next().get(id).unwrap();
+
+                if right_card.date > left_card.date {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Set(right_card.to_owned())));
+                    hunks.push(Hunk::NextLeft(HunkKind::Add(right_card.to_owned())));
+                    hunks.push(Hunk::PrevRight(HunkKind::Add(right_card.to_owned())));
+                } else {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Del(id.to_owned())));
+                    hunks.push(Hunk::NextRight(HunkKind::Del(id.to_owned())));
+                }
+            }
+
+            // 10 (1010): id in prev left and prev right cards, which
+            // means both prev are obsolete
+            if lp && !ln && rp && !rn {
+                hunks.push(Hunk::PrevLeft(HunkKind::Del(id.to_owned())));
+                hunks.push(Hunk::PrevRight(HunkKind::Del(id.to_owned())));
+            }
+
+            // 11 (1011): id in prev left and right cards, which means
+            // a card was deleted left and potentially deleted right
+            if lp && !ln && rp && rn {
+                let left_card = left.prev().get(id).unwrap();
+                let prev_right_card = right.prev().get(id).unwrap();
+                let next_right_card = right.next().get(id).unwrap();
+
+                if next_right_card.date > left_card.date {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Set(next_right_card.to_owned())));
+                    hunks.push(Hunk::NextLeft(HunkKind::Add(next_right_card.to_owned())));
+                    if next_right_card.date > prev_right_card.date {
+                        hunks.push(Hunk::PrevRight(HunkKind::Set(next_right_card.to_owned())));
+                    }
+                } else {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Del(id.to_owned())));
+                    hunks.push(Hunk::PrevRight(HunkKind::Del(id.to_owned())));
+                    hunks.push(Hunk::NextRight(HunkKind::Del(id.to_owned())));
+                }
+            }
+
+            // 12 (1100): id in left cards, which means the previous
+            // synchro failed and left is not in phase with right
+            // anymore
+            if lp && ln && !rp && !rn {
+                let prev_card = left.prev().get(id).unwrap();
+                let next_card = left.next().get(id).unwrap();
+
+                if next_card.date > prev_card.date {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Set(next_card.to_owned())));
+                }
+                hunks.push(Hunk::PrevRight(HunkKind::Add(next_card.to_owned())));
+                hunks.push(Hunk::NextRight(HunkKind::Add(next_card.to_owned())));
+            }
+
+            // 13 (1101): id in left and next right cards, which means
+            // the card was potentially modified left and added right
+            if lp && ln && !rp && rn {
+                let prev_left_card = left.prev().get(id).unwrap();
+                let next_left_card = left.next().get(id).unwrap();
+                let right_card = right.next().get(id).unwrap();
+
+                if right_card.date > next_left_card.date {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Set(right_card.to_owned())));
+                    hunks.push(Hunk::NextLeft(HunkKind::Set(right_card.to_owned())));
+                    hunks.push(Hunk::PrevRight(HunkKind::Add(right_card.to_owned())));
+                } else {
+                    if next_left_card.date > prev_left_card.date {
+                        hunks.push(Hunk::PrevLeft(HunkKind::Set(next_left_card.to_owned())));
+                    }
+                    hunks.push(Hunk::PrevRight(HunkKind::Add(next_left_card.to_owned())));
+                    hunks.push(Hunk::NextRight(HunkKind::Set(next_left_card.to_owned())));
+                }
+            }
+
+            // 14 (1110): id in left and prev right cards, which means
+            // the card was potentially modified left and deleted
+            // right
+            if lp && ln && rp && !rn {
+                let prev_left_card = left.prev().get(id).unwrap();
+                let next_left_card = left.next().get(id).unwrap();
+                let right_card = right.prev().get(id).unwrap();
+
+                if right_card.date > next_left_card.date {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Del(id.to_owned())));
+                    hunks.push(Hunk::NextLeft(HunkKind::Del(id.to_owned())));
+                    hunks.push(Hunk::PrevRight(HunkKind::Del(id.to_owned())));
+                } else {
+                    if next_left_card.date > prev_left_card.date {
+                        hunks.push(Hunk::PrevLeft(HunkKind::Set(next_left_card.to_owned())));
+                    }
+                    hunks.push(Hunk::PrevRight(HunkKind::Add(next_left_card.to_owned())));
+                    hunks.push(Hunk::NextRight(HunkKind::Set(next_left_card.to_owned())));
+                }
+            }
+
+            // 15 (1111): id everywhere
+            if lp && ln && rp && rn {
+                let prev_left_card = left.prev().get(id).unwrap();
+                let next_left_card = left.next().get(id).unwrap();
+                let prev_right_card = right.prev().get(id).unwrap();
+                let next_right_card = right.next().get(id).unwrap();
+                let mut cards = [
+                    prev_left_card,
+                    next_left_card,
+                    prev_right_card,
+                    next_right_card,
+                ];
+                cards.sort_by(|a, b| b.date.partial_cmp(&a.date).unwrap());
+                let card = *cards.first().unwrap();
+                if card != prev_left_card {
+                    hunks.push(Hunk::PrevLeft(HunkKind::Set(card.to_owned())));
+                }
+                if card != next_left_card {
+                    hunks.push(Hunk::NextLeft(HunkKind::Set(card.to_owned())));
+                }
+                if card != prev_right_card {
+                    hunks.push(Hunk::PrevRight(HunkKind::Set(card.to_owned())));
+                }
+                if card != next_right_card {
+                    hunks.push(Hunk::NextRight(HunkKind::Set(card.to_owned())));
                 }
             }
         }
@@ -124,68 +280,117 @@ mod tests {
 
     use super::*;
 
-    macro_rules! date {
-        ($date: literal) => {
-            DateTime::parse_from_rfc3339(&format!("{}T00:00:00+00:00", $date))
-                .unwrap()
-                .with_timezone(&Local)
-        };
+    struct TestCards {
+        prev: CardsMap,
+        next: CardsMap,
+    }
+
+    impl TestCards {
+        pub fn new(prev: Vec<Card>, next: Vec<Card>) -> Self {
+            Self {
+                prev: HashMap::from_iter(
+                    prev.iter()
+                        .map(|card| (card.id.to_owned(), card.to_owned())),
+                ),
+                next: HashMap::from_iter(
+                    next.iter()
+                        .map(|card| (card.id.to_owned(), card.to_owned())),
+                ),
+            }
+        }
+    }
+
+    impl Cards for TestCards {
+        fn prev(&self) -> &CardsMap {
+            &self.prev
+        }
+
+        fn next(&self) -> &CardsMap {
+            &self.next
+        }
     }
 
     macro_rules! card {
-        ($id: literal) => {
+        ($id: literal, $date: literal) => {
             Card {
                 id: format!("{}", $id),
-                etag: format!("{}", $id),
-                date: date!("2022-01-02"),
+                date: DateTime::parse_from_rfc3339(&format!("{}T00:00:00+00:00", $date))
+                    .unwrap()
+                    .with_timezone(&Local),
                 content: String::new(),
             }
         };
     }
 
-    macro_rules! card_entry {
-        ($id: literal) => {
-            (
-                format!("{}", $id),
-                Card {
-                    id: format!("{}", $id),
-                    etag: format!("{}", $id),
-                    date: date!("2022-01-02"),
-                    content: String::new(),
-                },
-            )
-        };
+    #[test]
+    fn test_patch_0000() {
+        let left = TestCards::new(vec![], vec![]);
+        let right = TestCards::new(vec![], vec![]);
+        let patch = Patch::new(left, right);
+
+        assert_eq!(vec![] as Vec<Hunk>, patch.hunks);
     }
 
     #[test]
-    fn test_build_patch() {
-        let local = Cards(HashMap::from_iter([
-            card_entry!("everywhere-same"),
-            card_entry!("local-only"),
-            card_entry!("local-and-cache"),
-        ]));
-        let cache = Cards(HashMap::from_iter([
-            card_entry!("everywhere-same"),
-            card_entry!("cache-only"),
-            card_entry!("local-and-cache"),
-            card_entry!("remote-and-cache"),
-        ]));
-        let remote = Cards(HashMap::from_iter([
-            card_entry!("everywhere-same"),
-            card_entry!("remote-only"),
-            card_entry!("remote-and-cache"),
-        ]));
+    fn test_patch_0001() {
+        let left = TestCards::new(vec![], vec![]);
+        let right = TestCards::new(vec![], vec![card!("new", "2020-01-19")]);
+        let patch = Patch::new(left, right);
 
-        let patch = build_patch(local, cache, remote);
+        assert_eq!(
+            vec![
+                Hunk::PrevLeft(HunkKind::Add(card!("new", "2020-01-19"))),
+                Hunk::NextLeft(HunkKind::Add(card!("new", "2020-01-19"))),
+                Hunk::PrevRight(HunkKind::Add(card!("new", "2020-01-19"))),
+            ],
+            patch.hunks
+        );
+    }
 
-        assert!(patch.contains(&Hunk::Remote(HunkKind::Add(card!("local-only")))));
-        assert!(patch.contains(&Hunk::Cache(HunkKind::Add(card!("local-only")))));
-        assert!(patch.contains(&Hunk::Cache(HunkKind::Del("cache-only".into()))));
-        assert!(patch.contains(&Hunk::Local(HunkKind::Add(card!("remote-only")))));
-        assert!(patch.contains(&Hunk::Cache(HunkKind::Add(card!("remote-only")))));
-        assert!(patch.contains(&Hunk::Local(HunkKind::Del("local-and-cache".into()))));
-        assert!(patch.contains(&Hunk::Cache(HunkKind::Del("local-and-cache".into()))));
-        assert!(patch.contains(&Hunk::Remote(HunkKind::Del("remote-and-cache".into()))));
-        assert!(patch.contains(&Hunk::Cache(HunkKind::Del("remote-and-cache".into()))));
+    #[test]
+    fn test_patch_0010() {
+        let left = TestCards::new(vec![], vec![]);
+        let right = TestCards::new(vec![card!("old", "2020-01-19")], vec![]);
+        let patch = Patch::new(left, right);
+
+        assert_eq!(
+            vec![Hunk::PrevRight(HunkKind::Del("old".into()))],
+            patch.hunks
+        );
+    }
+
+    #[test]
+    fn test_patch_0011() {
+        let left = TestCards::new(vec![], vec![]);
+        let right = TestCards::new(
+            vec![card!("old", "2020-01-19")],
+            vec![card!("new", "2020-01-20")],
+        );
+        let patch = Patch::new(left, right);
+
+        assert_eq!(
+            vec![
+                Hunk::PrevLeft(HunkKind::Add(card!("new", "2020-01-20"))),
+                Hunk::NextLeft(HunkKind::Add(card!("new", "2020-01-20"))),
+                Hunk::PrevRight(HunkKind::Set(card!("new", "2020-01-20"))),
+            ],
+            patch.hunks
+        );
+    }
+
+    #[test]
+    fn test_patch_0100() {
+        let left = TestCards::new(vec![], vec![card!("new", "2020-01-19")]);
+        let right = TestCards::new(vec![], vec![]);
+        let patch = Patch::new(left, right);
+
+        assert_eq!(
+            vec![
+                Hunk::PrevRight(HunkKind::Set(card!("new", "2020-01-20"))),
+                Hunk::NextLeft(HunkKind::Add(card!("new", "2020-01-20"))),
+                Hunk::PrevLeft(HunkKind::Add(card!("new", "2020-01-20"))),
+            ],
+            patch.hunks
+        );
     }
 }

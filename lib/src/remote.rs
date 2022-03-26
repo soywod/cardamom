@@ -1,21 +1,41 @@
 use chrono::DateTime;
-use std::path::PathBuf;
+use std::{collections::HashMap, path::PathBuf};
 
 use crate::{
-    card::{Card, Cards},
+    cache::CachedCards,
+    card::{Card, Cards, CardsMap},
     carddav::CardDavClient,
     error::*,
 };
 
 #[derive(Debug)]
 pub struct RemoteCards {
+    sync_dir: PathBuf,
     client: CardDavClient,
-    pub cards: Cards,
+    pub prev: CardsMap,
+    next: CardsMap,
+}
+
+impl Cards for RemoteCards {
+    fn prev(&self) -> &CardsMap {
+        &self.prev
+    }
+
+    fn next(&self) -> &CardsMap {
+        &self.next
+    }
 }
 
 impl RemoteCards {
-    pub fn new(host: String, port: u16, login: String, passwd: String) -> Result<Self> {
-        let mut cards = Cards::default();
+    pub fn new(
+        sync_dir: PathBuf,
+        host: String,
+        port: u16,
+        login: String,
+        passwd: String,
+    ) -> Result<Self> {
+        let prev = CachedCards::new(sync_dir.join(".remote"))?.cards;
+        let mut next = HashMap::default();
         let client = CardDavClient::new(host, port, login, passwd)?;
         let address_data = client.fetch_address_data()?;
 
@@ -26,12 +46,6 @@ impl RemoteCards {
                     .ok_or_else(|| CardamomError::ParseAddressDataHrefError(res.href.clone()))?
                     .to_string_lossy()
                     .to_string(),
-                etag: res
-                    .propstat
-                    .first()
-                    .and_then(|propstat| propstat.prop.getetag.as_ref())
-                    .unwrap_or(&String::default())
-                    .to_owned(),
                 date: res
                     .propstat
                     .first()
@@ -44,9 +58,14 @@ impl RemoteCards {
                     .ok_or_else(|| CardamomError::ParseAddressDataLastModifiedError)?,
                 content: String::default(),
             };
-            cards.insert(card.id.to_owned(), card);
+            next.insert(card.id.to_owned(), card);
         }
 
-        Ok(Self { client, cards })
+        Ok(Self {
+            sync_dir,
+            client,
+            prev,
+            next,
+        })
     }
 }

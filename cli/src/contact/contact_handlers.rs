@@ -13,16 +13,16 @@ use crate::{config::AccountConfig, output::PrinterService};
 pub fn sync<'a, P: PrinterService>(config: &AccountConfig, printer: &mut P) -> Result<()> {
     info!(">> sync contacts handler");
 
-    let cache = CachedCards::new(config.cache_cards_file_path())?;
     let local = LocalCards::new(config.sync_dir.clone())?;
     let remote = RemoteCards::new(
+        config.sync_dir.clone(),
         config.host.clone(),
         config.port.clone(),
         config.login.clone(),
         config.passwd()?,
     )?;
 
-    let patch = Patch::new(cache.cards, local.cards, remote.cards);
+    let patch = Patch::new(local, remote);
     trace!("patch: {:?}", patch);
 
     printer.print_str("TODO")?;
