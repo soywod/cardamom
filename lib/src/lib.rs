@@ -6,6 +6,7 @@ pub mod error;
 pub mod remote_card_repository;
 
 pub mod cache;
+pub mod local;
 
 use std::{collections::HashSet, fs, path::PathBuf};
 
@@ -28,13 +29,6 @@ pub enum HunkKind {
 pub type Patch = Vec<Hunk>;
 
 pub fn sync(path: PathBuf) -> Result<()> {
-    let cache_reader = fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(&path)
-        .map_err(|_| CardamomError::UnknownError)?;
-    let cache = serde_json::from_reader(cache_reader).map_err(|_| CardamomError::UnknownError)?;
     let local = fs::read_dir(&path)
         .map_err(|_| CardamomError::UnknownError)?
         .filter_map(|entry| match entry {

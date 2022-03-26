@@ -2,9 +2,10 @@
 //!
 //! This module contains all handlers related to the contact.
 
-use anyhow::{Context, Result};
-use cardamom_lib::cache::CachedCards;
-use log::info;
+use anyhow::Result;
+use log::{info, trace};
+
+use cardamom_lib::{cache::CachedCards, local::LocalCards};
 
 use crate::{config::AccountConfig, output::PrinterService};
 
@@ -13,7 +14,11 @@ pub fn sync<'a, P: PrinterService>(config: &AccountConfig, printer: &mut P) -> R
     info!(">> sync contacts handler");
 
     let cache = CachedCards::new(config.cache_cards_file_path())?;
-    println!("cache: {:?}", cache);
+    trace!("cache: {:?}", cache);
+
+    let local = LocalCards::new(config.sync_dir.clone())?;
+    trace!("local: {:?}", local);
+
     printer.print_str("TODO")?;
 
     info!("<< sync contacts handler");

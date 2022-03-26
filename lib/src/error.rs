@@ -16,6 +16,13 @@ pub enum CardamomError {
     ReadCachedCardsError(PathBuf, io::Error),
     #[error("cannot parse cached cards at {0:?}: {1}")]
     ParseCachedCardsError(PathBuf, serde_json::Error),
+
+    #[error("cannot read local cards directory at {0:?}: {1}")]
+    ReadLocalCardsDirError(PathBuf, io::Error),
+    #[error("cannot get local card metadata at {0:?}: {1}")]
+    GetVcfMetadataError(PathBuf, io::Error),
+    #[error("cannot get local card modified time at {0:?}: {1}")]
+    GetVcfModifiedError(PathBuf, io::Error),
 }
 
 pub type Result<T> = result::Result<T, CardamomError>;
