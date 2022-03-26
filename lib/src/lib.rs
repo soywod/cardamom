@@ -5,6 +5,8 @@ pub mod carddav;
 pub mod error;
 pub mod remote_card_repository;
 
+pub mod cache;
+
 use std::{collections::HashSet, fs, path::PathBuf};
 
 use crate::{card::*, error::*};

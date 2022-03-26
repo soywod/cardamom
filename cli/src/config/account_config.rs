@@ -1,8 +1,10 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use log::{debug, info, trace};
-use std::{env, path::PathBuf};
+use std::{env, fs, path::PathBuf};
 
 use crate::config::*;
+
+const CACHED_CARDS_FILE_NAME: &str = ".cache";
 
 /// Represents the user account.
 #[derive(Debug, Default, Clone)]
@@ -48,15 +50,20 @@ impl<'a> AccountConfig {
         debug!("selected account name: {:?}", name);
         trace!("account: {:?}", account);
 
+        let sync_dir = account
+            .sync_dir
+            .as_ref()
+            .and_then(|dir| shellexpand::full(dir).ok())
+            .map(|dir| PathBuf::from(dir.to_string()))
+            // TODO replace by `$XDG_DATA_HOME`
+            .unwrap_or_else(env::temp_dir);
+        fs::create_dir_all(&sync_dir)
+            .with_context(|| format!("cannot create sync dir at {:?}", sync_dir))?;
+
         let account_config = AccountConfig {
             name,
             default: account.default.unwrap_or_default(),
-            sync_dir: account
-                .sync_dir
-                .as_ref()
-                .and_then(|dir| shellexpand::full(dir).ok())
-                .map(|dir| PathBuf::from(dir.to_string()))
-                .unwrap_or_else(env::temp_dir),
+            sync_dir,
             host: account.host.to_owned(),
             port: account.port.unwrap_or(8843),
             login: account.login.to_owned(),
@@ -66,5 +73,9 @@ impl<'a> AccountConfig {
 
         info!("<< build account from config and account name");
         Ok(account_config)
+    }
+
+    pub fn cache_cards_file_path(&self) -> PathBuf {
+        self.sync_dir.join(CACHED_CARDS_FILE_NAME)
     }
 }
