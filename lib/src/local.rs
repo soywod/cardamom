@@ -8,7 +8,7 @@ use crate::{
 #[derive(Debug, Default)]
 pub struct LocalCards {
     dir: PathBuf,
-    cards: Cards,
+    pub cards: Cards,
 }
 
 impl LocalCards {

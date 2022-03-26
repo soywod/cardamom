@@ -10,7 +10,7 @@ use crate::{
 #[derive(Debug)]
 pub struct RemoteCards {
     client: CardDavClient,
-    cards: Cards,
+    pub cards: Cards,
 }
 
 impl RemoteCards {

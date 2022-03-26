@@ -5,7 +5,7 @@ use crate::{card::Cards, error::*};
 #[derive(Debug, Default)]
 pub struct CachedCards {
     file_path: PathBuf,
-    cards: Cards,
+    pub cards: Cards,
 }
 
 impl CachedCards {
